@@ -1,5 +1,4 @@
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use thiserror::Error;
 use tokio::fs;
@@ -26,10 +25,16 @@ pub struct TlsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProxyConfig {
-    /// The routes to proxy to
-    /// K = The prefix of the path
-    /// V = The upstream server to route to
-    pub prefix_routes: HashMap<String, String>,
+    pub routes: Vec<ProxyRoute>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProxyRoute {
+    pub path_prefix: Option<String>,
+    pub host: Option<String>,
+    pub default: Option<bool>,
+    pub upstream: String,
+    // TODO support authentication
 }
 
 #[derive(Debug, Error)]
@@ -42,6 +47,8 @@ pub enum ConfigError {
     TomlDe(#[from] toml::de::Error),
     #[error("Configured path does not exist: {0}")]
     FileNotFound(PathBuf),
+    #[error("Invalid configuration: {0}")]
+    InvalidConfig(String),
 }
 
 impl Default for NetConfig {
@@ -56,7 +63,14 @@ impl Default for NetConfig {
 impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
-            prefix_routes: vec![("/foo".into(), "http://foo.example.com".into())].into_iter().collect::<HashMap<_, _>>(),
+            routes: vec![
+                ProxyRoute {
+                    host: Some("foo.example.com".into()),
+                    path_prefix: Some("/bar".into()),
+                    upstream: "http://foo-bar.internal.example.com:8080".into(),
+                    default: Some(false),
+                }
+            ]
         }
     }
 }
@@ -87,6 +101,10 @@ impl Config {
             if !tls.privkey.exists() {
                 return Err(ConfigError::FileNotFound(tls.privkey.clone()));
             }
+        }
+
+        if self.proxy.routes.iter().filter(|x| x.default.eq(&Some(true))).count() > 1 {
+            return Err(ConfigError::InvalidConfig("Only one default route is allowed".into()))
         }
 
         Ok(())

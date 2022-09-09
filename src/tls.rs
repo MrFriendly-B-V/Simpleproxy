@@ -18,6 +18,7 @@ pub enum TlsError {
     NoCertificates,
 }
 
+/// Create a TLS configuration for the provided certificate and associated private key
 pub async fn configure_tls<P: AsRef<Path>, P1: AsRef<Path>>(
     cert_path: P,
     privkey_path: P1,
@@ -63,6 +64,7 @@ pub async fn configure_tls<P: AsRef<Path>, P1: AsRef<Path>>(
     Ok(config)
 }
 
+/// Read a file at the provided path into a Vec of bytes.
 async fn read_file_to_vec<P: AsRef<Path>>(path: P) -> Result<Vec<u8>, TlsError> {
     let path = path.as_ref();
     if !path.exists() {

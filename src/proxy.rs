@@ -11,6 +11,14 @@ pub async fn proxy(
     payload: web::Payload,
 ) -> HttpResponse {
     let path = req.path();
+    let host = match req.headers().get("host") {
+        Some(x) => match x.to_str() {
+            Ok(x) => x,
+            Err(_) => return HttpResponse::build(StatusCode::BAD_REQUEST).body("Invalid header 'Host'"),
+        },
+        None => return HttpResponse::build(StatusCode::BAD_REQUEST).body("Missing header 'Host'"),
+    };
+
     let body = match extract_body(payload).await {
         Ok(x) => x,
         Err(e) => {
@@ -19,23 +27,40 @@ pub async fn proxy(
         }
     };
 
-    for (prefix, upstream) in &data.proxy.prefix_routes {
-        if path.starts_with(prefix) {
-            return reqwest_response_to_actix(
-                make_request(req.clone(), body.clone(), upstream).await,
-            )
-            .await;
-        }
-    }
+    let possible_routes = data.proxy.routes.iter()
+        .filter(|x| {
+            // Check for a route matching the host
+            if let Some(route_host) = &x.host {
+                if route_host.eq(&host) {
+                    return true;
+                }
+            }
 
-    if let Some(upstream) = data.proxy.prefix_routes.get("*") {
-        return reqwest_response_to_actix(
-            make_request(req.clone(), body.clone(), upstream).await,
-        )
-        .await;
-    }
+            // Check for a route matching the path prefix
+            if let Some(route_path_prefix) = &x.path_prefix {
+                if path.starts_with(route_path_prefix.as_str()) {
+                    return true;
+                }
+            }
 
-    HttpResponse::new(StatusCode::NOT_FOUND)
+            false
+        })
+        .collect::<Vec<_>>();
+    let route = possible_routes.first();
+
+    let route = match route {
+        Some(x) => x,
+        None => {
+            // Check if there's a default route configured
+            let default_routes = data.proxy.routes.iter().filter(|x| x.default.eq(&Some(true))).collect::<Vec<_>>();
+            match default_routes.first() {
+                Some(x) => x.clone(),
+                None => return HttpResponse::NotFound().finish(),
+            }
+        },
+    };
+
+    reqwest_response_to_actix(make_request(req.clone(), body.clone(), &route.upstream).await).await
 }
 
 /// Extract the request body

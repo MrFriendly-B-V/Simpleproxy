@@ -62,6 +62,7 @@ async fn main() -> std::io::Result<()> {
     http_server.run().await
 }
 
+/// Configure the tracing logger according to the provided log level
 fn configure_tracing(level: u8) {
     let level = match level {
         0 => Level::INFO,
