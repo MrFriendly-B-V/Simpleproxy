@@ -8,15 +8,22 @@ use tracing::warn;
 pub async fn proxy(
     data: web::Data<Config>,
     req: HttpRequest,
-    payload: web::Payload,
+    payload: web::Payload
 ) -> HttpResponse {
     let path = req.path();
+
     let host = match req.headers().get("host") {
         Some(x) => match x.to_str() {
             Ok(x) => x,
             Err(_) => return HttpResponse::build(StatusCode::BAD_REQUEST).body("Invalid header 'Host'"),
         },
-        None => return HttpResponse::build(StatusCode::BAD_REQUEST).body("Missing header 'Host'"),
+        None => {
+            // HTTP 2 does not supply the Host header
+            match req.uri().host() {
+                Some(x) => x,
+                None => return HttpResponse::build(StatusCode::BAD_REQUEST).body("Missing header 'Host' (HTTP/1.1) or the Host portion of the URI (HTTP/2)")
+            }
+        },
     };
 
     let body = match extract_body(payload).await {
@@ -27,7 +34,7 @@ pub async fn proxy(
         }
     };
 
-    let possible_routes = data.proxy.routes.iter()
+    let possible_routes = data.routes.iter()
         .filter(|x| {
             // Check for a route matching the host
             if let Some(route_host) = &x.host {
@@ -57,7 +64,7 @@ pub async fn proxy(
         Some(x) => x,
         None => {
             // Check if there's a default route configured
-            let default_routes = data.proxy.routes.iter().filter(|x| x.default.eq(&Some(true))).collect::<Vec<_>>();
+            let default_routes = data.routes.iter().filter(|x| x.default.eq(&Some(true))).collect::<Vec<_>>();
             match default_routes.first() {
                 Some(x) => x.clone(),
                 None => return HttpResponse::NotFound().finish(),

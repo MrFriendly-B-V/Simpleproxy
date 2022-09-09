@@ -4,11 +4,11 @@ use thiserror::Error;
 use tokio::fs;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     pub net: NetConfig,
     pub tls: Option<TlsConfig>,
-    pub proxy: ProxyConfig,
+    pub routes: Vec<Route>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -24,12 +24,7 @@ pub struct TlsConfig {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyConfig {
-    pub routes: Vec<ProxyRoute>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProxyRoute {
+pub struct Route {
     pub path_prefix: Option<String>,
     pub host: Option<String>,
     pub default: Option<bool>,
@@ -51,6 +46,18 @@ pub enum ConfigError {
     InvalidConfig(String),
 }
 
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            net: NetConfig::default(),
+            tls: Some(TlsConfig::default()),
+            routes: vec![
+                Route::default(),
+            ]
+        }
+    }
+}
+
 impl Default for NetConfig {
     fn default() -> Self {
         Self {
@@ -60,17 +67,13 @@ impl Default for NetConfig {
     }
 }
 
-impl Default for ProxyConfig {
+impl Default for Route {
     fn default() -> Self {
         Self {
-            routes: vec![
-                ProxyRoute {
-                    host: Some("foo.example.com".into()),
-                    path_prefix: Some("/bar".into()),
-                    upstream: "http://foo-bar.internal.example.com:8080".into(),
-                    default: Some(false),
-                }
-            ]
+            host: Some("foo.example.com".into()),
+            path_prefix: Some("/bar".into()),
+            upstream: "http://foo-bar.internal.example.com:8080".into(),
+            default: Some(false),
         }
     }
 }
@@ -103,7 +106,7 @@ impl Config {
             }
         }
 
-        if self.proxy.routes.iter().filter(|x| x.default.eq(&Some(true))).count() > 1 {
+        if self.routes.iter().filter(|x| x.default.eq(&Some(true))).count() > 1 {
             return Err(ConfigError::InvalidConfig("Only one default route is allowed".into()))
         }
 
