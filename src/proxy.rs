@@ -32,7 +32,12 @@ pub async fn proxy(
             // Check for a route matching the host
             if let Some(route_host) = &x.host {
                 if route_host.eq(&host) {
-                    return true;
+                    // Even if the host matches, if a path is provided, the path must match too
+                    if let Some(route_path_prefix) = &x.path_prefix {
+                        if path.starts_with(route_path_prefix.as_str()) {
+                            return true;
+                        }
+                    }
                 }
             }
 
