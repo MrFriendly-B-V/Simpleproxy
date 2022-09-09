@@ -1,9 +1,11 @@
+use std::borrow::Cow;
 use crate::Config;
 use actix_web::{web, HttpRequest, HttpResponse};
 use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest::{Client, Response, StatusCode};
 use tracing::warn;
+use crate::config::Route;
 
 pub async fn proxy(
     data: web::Data<Config>,
@@ -72,7 +74,26 @@ pub async fn proxy(
         },
     };
 
-    reqwest_response_to_actix(make_request(req.clone(), body.clone(), &route.upstream).await).await
+    // Finally, make the request to the upstream server
+    // and convert the response into a HttpResponse
+    reqwest_response_to_actix(make_request(
+        req.clone(),
+        build_request_path(path, &route).as_ref(),
+        body.clone(),
+        &route.upstream
+    ).await).await
+}
+
+/// Build the path that should be used in the upstream request
+/// according to the settings specified in the [Route]
+fn build_request_path<'a>(orig_path: &'a str, route: &Route) -> Cow<'a, str> {
+    if let (Some(path_prefix), Some(strip_prefix_path)) = (&route.path_prefix, route.strip_path_prefix) {
+        if strip_prefix_path {
+            return Cow::Owned(orig_path.replace(path_prefix.as_str(), ""));
+        }
+    }
+
+    Cow::Borrowed(orig_path)
 }
 
 /// Extract the request body
@@ -114,13 +135,14 @@ async fn reqwest_response_to_actix(response: reqwest::Result<Response>) -> HttpR
 /// Proxy the request to the provided upstream server.
 async fn make_request(
     req: HttpRequest,
+    path: &str,
     body: Vec<u8>,
     upstream: &str,
 ) -> reqwest::Result<Response> {
     let client = Client::new();
     let mut req_builder = client.request(
         req.method().clone(),
-        format!("{upstream}{}?{}", req.path(), req.query_string()),
+        format!("{upstream}{path}?{}", req.query_string()),
     );
 
     for (k, v) in req.headers() {

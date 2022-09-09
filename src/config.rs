@@ -25,11 +25,24 @@ pub struct TlsConfig {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Route {
+    /// The path prefix for this route to match on.
+    /// E.g. setting this to `/foo` will route `/foo/bar`, `/foo/foo/bar` to this route,
+    /// but `/bar/foo` will not be routed to this route.
     pub path_prefix: Option<String>,
+    /// The host this route matches on. E.g. `foo.example.com`
     pub host: Option<String>,
+    /// Whether this should be the default route (i.e. fallback)
+    /// if no other route matches. Only one route may have this
+    /// set to true
     pub default: Option<bool>,
+    /// The upstream server
+    /// This includes the protocol, e.g. `https://`
     pub upstream: String,
-    // TODO support authentication
+    /// Whether the `path_prefix` should be stripped from the request path
+    /// E.g. if the `path_prefix` is `/foo`, and the request path is `/foo/bar`,
+    /// with this option enabled the path becomes just `/bar`
+    pub strip_path_prefix: Option<bool>,
+    // TODO support authorization
 }
 
 #[derive(Debug, Error)]
@@ -74,6 +87,7 @@ impl Default for Route {
             path_prefix: Some("/bar".into()),
             upstream: "http://foo-bar.internal.example.com:8080".into(),
             default: Some(false),
+            strip_path_prefix: Some(false),
         }
     }
 }
