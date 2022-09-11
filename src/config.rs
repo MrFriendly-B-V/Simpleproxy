@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use thiserror::Error;
@@ -9,6 +10,16 @@ pub struct Config {
     pub net: NetConfig,
     pub tls: Option<TlsConfig>,
     pub routes: Vec<Route>,
+    pub proxy: Option<ProxyConfig>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ProxyConfig {
+    /// The value for the `Server` header
+    /// to be set on responses in case of an error.
+    /// This makes it easy to track if the error
+    /// occurred at the proxy (e.g. a misconfigured route)
+    pub error_server_header: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -17,7 +28,7 @@ pub struct NetConfig {
     pub bind_address: String,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TlsConfig {
     pub pubkey: PathBuf,
     pub privkey: PathBuf,
@@ -33,7 +44,8 @@ pub struct Route {
     pub host: Option<String>,
     /// Whether this should be the default route (i.e. fallback)
     /// if no other route matches. Only one route may have this
-    /// set to true
+    /// set to true per host. For routes without `host` specified,
+    /// there may only be 1 default route.
     pub default: Option<bool>,
     /// The upstream server
     /// This includes the protocol, e.g. `https://`
@@ -66,7 +78,8 @@ impl Default for Config {
             tls: Some(TlsConfig::default()),
             routes: vec![
                 Route::default(),
-            ]
+            ],
+            proxy: None,
         }
     }
 }
@@ -76,6 +89,15 @@ impl Default for NetConfig {
         Self {
             port: 8080,
             bind_address: "0.0.0.0".into(),
+        }
+    }
+}
+
+impl Default for TlsConfig {
+    fn default() -> Self {
+        Self {
+            privkey: PathBuf::from("/etc/your/priv/key.pem"),
+            pubkey: PathBuf::from("/etc/your/pub/key.pem"),
         }
     }
 }
@@ -120,8 +142,28 @@ impl Config {
             }
         }
 
-        if self.routes.iter().filter(|x| x.default.eq(&Some(true))).count() > 1 {
-            return Err(ConfigError::InvalidConfig("Only one default route is allowed".into()))
+
+        // Check the `default` parameter
+        let mut host_default_count: HashMap<&str, usize> = HashMap::with_capacity(self.routes.len());
+        let mut no_host_default_count = 0_usize;
+        for route in &self.routes {
+            if let Some(host) = &route.host {
+                host_default_count.entry(&**host)
+                    .and_modify(|x| *x += 1)
+                    .or_insert(0);
+            } else {
+                no_host_default_count += 1;
+            }
+        }
+
+        for (host, default_count) in host_default_count {
+            if default_count > 1 {
+                return Err(ConfigError::InvalidConfig(format!("The host {host} may only have 1 default route. It currently has {default_count}")));
+            }
+        }
+
+        if no_host_default_count > 1 {
+            return Err(ConfigError::InvalidConfig(format!("There may only be 1 default route without a specified host. There are currently {no_host_default_count}")));
         }
 
         Ok(())

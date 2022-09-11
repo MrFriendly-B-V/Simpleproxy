@@ -4,9 +4,10 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest::{Client, Response, StatusCode};
-use tracing::warn;
-use crate::config::Route;
+use tracing::{warn, instrument, debug};
+use crate::config::{ProxyConfig, Route};
 
+#[instrument(skip(data, payload))]
 pub async fn proxy(
     data: web::Data<Config>,
     req: HttpRequest,
@@ -46,6 +47,8 @@ pub async fn proxy(
                         if path.starts_with(route_path_prefix.as_str()) {
                             return true;
                         }
+                    } else {
+                        return true;
                     }
                 }
             }
@@ -69,19 +72,26 @@ pub async fn proxy(
             let default_routes = data.routes.iter().filter(|x| x.default.eq(&Some(true))).collect::<Vec<_>>();
             match default_routes.first() {
                 Some(x) => x.clone(),
-                None => return HttpResponse::NotFound().finish(),
+                None => {
+                    debug!("Could not find route");
+                    return HttpResponse::build(StatusCode::NOT_FOUND)
+                        .insert_header(("Server", get_server_header(data.proxy.as_ref())))
+                        .finish();
+                },
             }
         },
     };
 
-    // Finally, make the request to the upstream server
-    // and convert the response into a HttpResponse
-    reqwest_response_to_actix(make_request(
+    // Make the request to the upstream server
+    let reqwest_response = make_request(
         req.clone(),
         build_request_path(path, &route).as_ref(),
         body.clone(),
         &route.upstream
-    ).await).await
+    ).await;
+
+    // Convert the reqwest response to an Actix response
+    reqwest_response_to_actix(reqwest_response, data.proxy.as_ref()).await
 }
 
 /// Build the path that should be used in the upstream request
@@ -107,13 +117,20 @@ async fn extract_body(mut body: web::Payload) -> Result<Vec<u8>> {
     Ok(buf)
 }
 
+fn get_server_header(proxy_config: Option<&ProxyConfig>) -> String {
+    proxy_config
+        .map(|x| x.error_server_header.clone())
+        .flatten()
+        .unwrap_or(String::default())
+}
+
 /// Turn a Reqwest response into an Actix response
-async fn reqwest_response_to_actix(response: reqwest::Result<Response>) -> HttpResponse {
+async fn reqwest_response_to_actix(response: reqwest::Result<Response>, proxy_config: Option<&ProxyConfig>) -> HttpResponse {
     let response = match response {
         Ok(x) => x,
-        Err(e) => {
-            return HttpResponse::build(StatusCode::BAD_GATEWAY).body(e.to_string());
-        }
+        Err(e) => return HttpResponse::build(StatusCode::BAD_GATEWAY)
+                .insert_header(("Server", get_server_header(proxy_config)))
+                .body(e.to_string()),
     };
 
     let mut builder = HttpResponse::build(response.status());
@@ -149,6 +166,20 @@ async fn make_request(
         req_builder = req_builder.header(k, v);
     }
 
-    req_builder = req_builder.body(body);
+    let conninfo = req.connection_info();
+    let x_forwarded_for = req.headers().get("x-forwarded-for")
+        .map(|x| x.to_str().map(|x| Some(x)).unwrap_or(None))
+        .flatten()
+        .map(|x| if !x.is_empty() {
+            format!("{x} {}", conninfo.realip_remote_addr().unwrap_or(""))
+        } else { x.to_string() })
+        .unwrap_or(conninfo.realip_remote_addr().unwrap_or("").to_string());
+
+    req_builder = req_builder
+        .header("X-Real-IP", conninfo.realip_remote_addr().unwrap_or(""))
+        .header("X-Forwarded-For", &x_forwarded_for)
+        .header("X-Forwarded-Proto", conninfo.scheme())
+        .body(body);
+
     req_builder.send().await
 }

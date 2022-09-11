@@ -2,7 +2,7 @@
 Description=Simple reverse proxy service
 
 [Service]
-ExecStart=/usr/bin/mrf-simpleproxy
+ExecStart=/usr/bin/simpleproxy
 
 [Install]
 WantedBy=multi-user.target
