@@ -1,13 +1,15 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use crate::Config;
 use actix_web::{web, HttpRequest, HttpResponse};
+use actix_web::http::header::{HeaderName, HeaderValue};
 use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest::{Client, Response, StatusCode};
 use tracing::{warn, instrument, debug};
 use crate::config::{ProxyConfig, Route};
 
-#[instrument(skip(data, payload))]
+#[instrument(skip(data, req, payload))]
 pub async fn proxy(
     data: web::Data<Config>,
     req: HttpRequest,
@@ -157,13 +159,41 @@ async fn make_request(
     upstream: &str,
 ) -> reqwest::Result<Response> {
     let client = Client::new();
+
+    let request_url = if req.query_string().is_empty() {
+       format!("{upstream}{path}")
+    } else {
+        format!("{upstream}{path}?{}", req.query_string())
+    };
+
     let mut req_builder = client.request(
         req.method().clone(),
-        format!("{upstream}{path}?{}", req.query_string()),
+        &request_url,
     );
 
+    // Some applications don't like multiple headers,
+    // so we'll combine it.
+    let mut header_map: HashMap<&HeaderName, Vec<&HeaderValue>> = HashMap::with_capacity(req.headers().len_keys());
+
     for (k, v) in req.headers() {
-        req_builder = req_builder.header(k, v);
+        header_map.entry(k)
+            .and_modify(|values| values.push(v))
+            .or_insert(vec![v]);
+    }
+
+    let processed_headers = header_map.into_iter()
+        .map(|(k, v)| {
+            let v_string = v.into_iter()
+                .map(|x| x.to_str())
+                .filter_map(|x| x.ok())
+                .map(|x| x.to_string())
+                .collect::<Vec<_>>();
+            (k, v_string.join("; "))
+        })
+        .collect::<HashMap<_, _>>();
+
+    for (name, value) in processed_headers {
+        req_builder = req_builder.header(name, &value);
     }
 
     let conninfo = req.connection_info();
@@ -181,5 +211,6 @@ async fn make_request(
         .header("X-Forwarded-Proto", conninfo.scheme())
         .body(body);
 
+    debug!("Sending request to {request_url}");
     req_builder.send().await
 }
