@@ -146,13 +146,16 @@ impl Config {
         // Check the `default` parameter
         let mut host_default_count: HashMap<&str, usize> = HashMap::with_capacity(self.routes.len());
         let mut no_host_default_count = 0_usize;
+
         for route in &self.routes {
-            if let Some(host) = &route.host {
-                host_default_count.entry(&**host)
-                    .and_modify(|x| *x += 1)
-                    .or_insert(0);
-            } else {
-                no_host_default_count += 1;
+            match (&route.host, route.default) {
+                (Some(host), Some(default)) if default => {
+                    host_default_count.entry(&**host)
+                        .and_modify(|x| *x += 1)
+                        .or_insert(0);
+                },
+                (None, Some(default)) if default => no_host_default_count += 1,
+                _ => {}
             }
         }
 
