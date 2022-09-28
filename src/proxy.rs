@@ -6,7 +6,7 @@ use actix_web::http::header::{HeaderName, HeaderValue};
 use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest::{Client, Response, StatusCode};
-use tracing::{warn, instrument, debug};
+use tracing::{warn, instrument, debug, trace};
 use crate::config::{ProxyConfig, Route};
 
 #[instrument(skip(data, req, payload))]
@@ -16,19 +16,9 @@ pub async fn proxy(
     payload: web::Payload
 ) -> HttpResponse {
     let path = req.path();
-
-    let host = match req.headers().get("host") {
-        Some(x) => match x.to_str() {
-            Ok(x) => x,
-            Err(_) => return HttpResponse::build(StatusCode::BAD_REQUEST).body("Invalid header 'Host'"),
-        },
-        None => {
-            // HTTP 2 does not supply the Host header
-            match req.uri().host() {
-                Some(x) => x,
-                None => return HttpResponse::build(StatusCode::BAD_REQUEST).body("Missing header 'Host' (HTTP/1.1) or the Host portion of the URI (HTTP/2)")
-            }
-        },
+    let host = match get_request_host(&req) {
+        Some(x) => x,
+        None => return HttpResponse::new(StatusCode::BAD_GATEWAY)
     };
 
     let body = match extract_body(payload).await {
@@ -39,49 +29,14 @@ pub async fn proxy(
         }
     };
 
-    let possible_routes = data.routes.iter()
-        .filter(|x| {
-            // Check for a route matching the host
-            if let Some(route_host) = &x.host {
-                if route_host.eq(&host) {
-                    // Even if the host matches, if a path is provided, the path must match too
-                    if let Some(route_path_prefix) = &x.path_prefix {
-                        if path.starts_with(route_path_prefix.as_str()) {
-                            return true;
-                        }
-                    } else {
-                        return true;
-                    }
-                }
-            }
-
-            // Check for a route matching the path prefix
-            if let Some(route_path_prefix) = &x.path_prefix {
-                if path.starts_with(route_path_prefix.as_str()) {
-                    return true;
-                }
-            }
-
-            false
-        })
-        .collect::<Vec<_>>();
-    let route = possible_routes.first();
-
-    let route = match route {
+    let route = match choose_route(host, path, data.routes.iter().collect::<Vec<_>>()) {
         Some(x) => x,
         None => {
-            // Check if there's a default route configured
-            let default_routes = data.routes.iter().filter(|x| x.default.eq(&Some(true))).collect::<Vec<_>>();
-            match default_routes.first() {
-                Some(x) => x.clone(),
-                None => {
-                    debug!("Could not find route");
-                    return HttpResponse::build(StatusCode::NOT_FOUND)
-                        .insert_header(("Server", get_server_header(data.proxy.as_ref())))
-                        .finish();
-                },
-            }
-        },
+            debug!("Could not find route");
+            return HttpResponse::build(StatusCode::NOT_FOUND)
+                .insert_header(("Server", get_server_header(data.proxy.as_ref())))
+                .finish();
+        }
     };
 
     // Make the request to the upstream server
@@ -94,7 +49,69 @@ pub async fn proxy(
     ).await;
 
     // Convert the reqwest response to an Actix response
-    reqwest_response_to_actix(reqwest_response, data.proxy.as_ref()).await
+    reqwest_response_to_actix(reqwest_response, data.proxy.as_ref(), &route).await
+}
+
+fn choose_route<'a>(host: &str, path: &str, routes: Vec<&'a Route>) -> Option<&'a Route> {
+    let mut route_has_host_and_path = Vec::new();
+    let mut route_has_host = Vec::new();
+    let mut route_has_path = Vec::new();
+    let mut default_routes = Vec::new();
+
+    for route in routes {
+        if let (Some(route_host), Some(route_path)) = (&route.host, &route.path_prefix) {
+            if route_host.eq(host) && route_path.eq(path) {
+                route_has_host_and_path.push(route);
+            }
+        }
+
+        if let Some(route_host) = &route.host {
+            if route_host.eq(host) {
+                route_has_host.push(route);
+            }
+        }
+
+        if let Some(route_path) = &route.path_prefix {
+            if route_path.eq(path) {
+                route_has_path.push(route);
+            }
+        }
+
+        if let Some(default) = route.default {
+            if default {
+                default_routes.push(route);
+            }
+        }
+    }
+
+    if let Some(route) = route_has_host_and_path.first() {
+        trace!("Host and path route chosen");
+        return Some(route);
+    }
+
+    else if let Some(route) = route_has_host.first() {
+        trace!("Host route chosen");
+        return Some(route);
+    }
+
+    if let Some(route) = route_has_path.first() {
+        trace!("Path route chosen");
+        return Some(route);
+    }
+
+    if let Some(route) = default_routes.first() {
+        trace!("Default route chosen");
+        return Some(route);
+    }
+
+    None
+}
+
+fn get_request_host(req: &HttpRequest) -> Option<&str> {
+    match req.headers().get("host") {
+        Some(h) => h.to_str().ok(),
+        None => req.uri().host()
+    }
 }
 
 /// Build the path that should be used in the upstream request
@@ -128,7 +145,7 @@ fn get_server_header(proxy_config: Option<&ProxyConfig>) -> String {
 }
 
 /// Turn a Reqwest response into an Actix response
-async fn reqwest_response_to_actix(response: reqwest::Result<Response>, proxy_config: Option<&ProxyConfig>) -> HttpResponse {
+async fn reqwest_response_to_actix(response: reqwest::Result<Response>, proxy_config: Option<&ProxyConfig>, route: &Route) -> HttpResponse {
     let response = match response {
         Ok(x) => x,
         Err(e) => return HttpResponse::build(StatusCode::BAD_GATEWAY)
@@ -139,6 +156,12 @@ async fn reqwest_response_to_actix(response: reqwest::Result<Response>, proxy_co
     let mut builder = HttpResponse::build(response.status());
     for (k, v) in response.headers() {
         builder.insert_header((k, v));
+    }
+
+    if let Some(response_headers) = &route.response_headers {
+        for (k, v) in response_headers {
+            builder.insert_header((&**k, &**v));
+        }
     }
 
     let body = match response.bytes().await {

@@ -55,6 +55,8 @@ pub struct Route {
     /// with this option enabled the path becomes just `/bar`
     pub strip_path_prefix: Option<bool>,
     // TODO support authorization
+    /// Optional headers to insert into the response back to the client
+    pub response_headers: Option<HashMap<String, String>>,
 }
 
 #[derive(Debug, Error)]
@@ -110,6 +112,7 @@ impl Default for Route {
             upstream: "http://foo-bar.internal.example.com:8080".into(),
             default: Some(false),
             strip_path_prefix: Some(false),
+            response_headers: Some(vec![("X-Foo".to_string(), "Bar".to_string())].into_iter().collect())
         }
     }
 }

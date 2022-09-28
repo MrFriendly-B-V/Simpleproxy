@@ -7,10 +7,6 @@ pub struct Args {
     /// a default configuration will be written.
     #[clap(short, long, default_value_t = String::from("/etc/simpleproxy/config.toml"), value_parser)]
     pub config: String,
-    /// The verbosity level. The verbosity is determined by how often
-    /// this flag is given.
-    #[clap(short, action = clap::ArgAction::Count)]
-    pub verbose: u8,
 }
 
 impl Args {

@@ -7,12 +7,13 @@ use crate::args::Args;
 use crate::config::Config;
 use actix_web::{web, App, HttpServer, Route};
 use std::process::exit;
-use tracing::{error, Level};
+use tracing::error;
+use tracing_subscriber::layer::SubscriberExt;
 
 #[tokio::main]
 async fn main() -> std::io::Result<()> {
     let args = Args::parse();
-    configure_tracing(args.verbose);
+    configure_tracing();
 
     let config = match Config::new(&args.config).await {
         Ok(x) => x,
@@ -63,17 +64,11 @@ async fn main() -> std::io::Result<()> {
 }
 
 /// Configure the tracing logger according to the provided log level
-fn configure_tracing(level: u8) {
-    let level = match level {
-        0 => Level::INFO,
-        1 => Level::DEBUG,
-        _ => Level::TRACE,
-    };
+fn configure_tracing() {
 
-    let tracing_sub = tracing_subscriber::fmt()
-        .compact()
-        .with_max_level(level)
-        .finish();
+    let tracing_sub = tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().compact())
+        .with(tracing_subscriber::EnvFilter::from_default_env());
 
     tracing::subscriber::set_global_default(tracing_sub).expect("configuring tracing");
 }
