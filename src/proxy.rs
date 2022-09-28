@@ -89,7 +89,8 @@ pub async fn proxy(
         req.clone(),
         build_request_path(path, &route).as_ref(),
         body.clone(),
-        &route.upstream
+        &route.upstream,
+        host,
     ).await;
 
     // Convert the reqwest response to an Actix response
@@ -157,6 +158,7 @@ async fn make_request(
     path: &str,
     body: Vec<u8>,
     upstream: &str,
+    original_host: &str,
 ) -> reqwest::Result<Response> {
     let client = Client::new();
 
@@ -195,6 +197,8 @@ async fn make_request(
     for (name, value) in processed_headers {
         req_builder = req_builder.header(name, &value);
     }
+
+    req_builder = req_builder.header("Host", original_host);
 
     let conninfo = req.connection_info();
     let x_forwarded_for = req.headers().get("x-forwarded-for")
