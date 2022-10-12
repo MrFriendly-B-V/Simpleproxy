@@ -5,7 +5,7 @@ use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web::http::header::{HeaderName, HeaderValue};
 use anyhow::Result;
 use futures_util::StreamExt;
-use reqwest::{Client, Response, StatusCode};
+use reqwest::{Client, Response, StatusCode, Version};
 use tracing::{warn, instrument, debug, trace};
 use crate::config::{ProxyConfig, Route};
 
@@ -60,7 +60,7 @@ fn choose_route<'a>(host: &str, path: &str, routes: Vec<&'a Route>) -> Option<&'
 
     for route in routes {
         if let (Some(route_host), Some(route_path)) = (&route.host, &route.path_prefix) {
-            if route_host.eq(host) && route_path.eq(path) {
+            if route_host.eq(host) && path.starts_with(route_path) {
                 route_has_host_and_path.push(route);
             }
         }
@@ -72,7 +72,7 @@ fn choose_route<'a>(host: &str, path: &str, routes: Vec<&'a Route>) -> Option<&'
         }
 
         if let Some(route_path) = &route.path_prefix {
-            if route_path.eq(path) {
+            if path.starts_with(route_path) {
                 route_has_path.push(route);
             }
         }
@@ -108,10 +108,13 @@ fn choose_route<'a>(host: &str, path: &str, routes: Vec<&'a Route>) -> Option<&'
 }
 
 fn get_request_host(req: &HttpRequest) -> Option<&str> {
-    match req.headers().get("host") {
+    let host = match req.headers().get("host") {
         Some(h) => h.to_str().ok(),
         None => req.uri().host()
-    }
+    };
+
+    trace!("Got Host {host:?}");
+    host
 }
 
 /// Build the path that should be used in the upstream request
@@ -194,7 +197,8 @@ async fn make_request(
     let mut req_builder = client.request(
         req.method().clone(),
         &request_url,
-    );
+    )
+        .version(Version::HTTP_11);
 
     // Some applications don't like multiple headers,
     // so we'll combine it.
@@ -236,6 +240,7 @@ async fn make_request(
         .header("X-Real-IP", conninfo.realip_remote_addr().unwrap_or(""))
         .header("X-Forwarded-For", &x_forwarded_for)
         .header("X-Forwarded-Proto", conninfo.scheme())
+        .header("X-Forwarded-Host", original_host)
         .body(body);
 
     debug!("Sending request to {request_url}");
