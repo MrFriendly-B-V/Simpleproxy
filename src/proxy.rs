@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::ptr::eq;
 use crate::Config;
 use actix_web::{web, HttpRequest, HttpResponse};
 use actix_web::http::header::{HeaderName, HeaderValue};
@@ -222,6 +223,8 @@ async fn make_request(
         .collect::<HashMap<_, _>>();
 
     for (name, value) in processed_headers {
+        if name.as_str().to_lowercase().eq("host") { continue; }
+
         req_builder = req_builder.header(name, &value);
     }
 
