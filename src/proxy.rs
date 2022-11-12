@@ -223,9 +223,11 @@ async fn make_request(
         .collect::<HashMap<_, _>>();
 
     for (name, value) in processed_headers {
-        if name.as_str().to_lowercase().eq("host") { continue; }
-
-        req_builder = req_builder.header(name, &value);
+	if name.as_str().to_lowercase().eq("host") {
+            continue;
+        }
+	
+	req_builder = req_builder.header(name, &value);
     }
 
     req_builder = req_builder.header("Host", original_host);
