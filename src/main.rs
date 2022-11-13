@@ -8,6 +8,7 @@ use crate::config::Config;
 use actix_web::{web, App, HttpServer, Route};
 use std::process::exit;
 use tracing::error;
+use tracing_actix_web::RootSpanBuilder;
 use tracing_subscriber::layer::SubscriberExt;
 
 #[tokio::main]
@@ -68,7 +69,7 @@ fn configure_tracing() {
 
     let tracing_sub = tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer().compact())
-        .with(tracing_subscriber::EnvFilter::from_default_env());
+        .with(tracing_subscriber::EnvFilter::from_env("RUST_LOG"));
 
     tracing::subscriber::set_global_default(tracing_sub).expect("configuring tracing");
 }
