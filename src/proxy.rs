@@ -30,6 +30,9 @@ pub async fn proxy(
         }
     };
 
+    debug!("path: {path}");
+    debug!("host: {host}");
+
     let route = match choose_route(&host, path, data.routes.iter().collect::<Vec<_>>()) {
         Some(x) => x,
         None => {
@@ -61,24 +64,22 @@ fn choose_route<'a>(host: &str, path: &str, routes: Vec<&'a Route>) -> Option<&'
 
     for route in routes {
         if let (Some(route_host), Some(route_path)) = (&route.host, &route.path_prefix) {
+            debug!("route and path present: {route_host} {route_path}");
+            debug!("route: {}", route_host.eq(host));
+            debug!("path: {}", path.starts_with(route_path));
+
             if route_host.eq(host) && path.starts_with(route_path) {
                 route_has_host_and_path.push(route);
             }
-        }
-
-        if let Some(route_host) = &route.host {
+        } else if let Some(route_host) = &route.host {
             if route_host.eq(host) {
                 route_has_host.push(route);
             }
-        }
-
-        if let Some(route_path) = &route.path_prefix {
+        } else  if let Some(route_path) = &route.path_prefix {
             if path.starts_with(route_path) {
                 route_has_path.push(route);
             }
-        }
-
-        if let Some(default) = route.default {
+        } else if let Some(default) = route.default {
             if default {
                 default_routes.push(route);
             }
@@ -236,11 +237,11 @@ async fn make_request(
         .collect::<HashMap<_, _>>();
 
     for (name, value) in processed_headers {
-        if name.as_str().to_lowercase().eq("host") {
+	if name.as_str().to_lowercase().eq("host") {
             continue;
         }
-
-        req_builder = req_builder.header(name, &value);
+	
+	req_builder = req_builder.header(name, &value);
     }
 
     req_builder = req_builder.header("Host", original_host);
