@@ -6,6 +6,7 @@ use actix_web::http::header::{HeaderName, HeaderValue};
 use anyhow::Result;
 use futures_util::StreamExt;
 use reqwest::{Client, Response, StatusCode, Version};
+use reqwest::redirect::Policy;
 use tracing::{warn, instrument, debug, trace};
 use crate::config::{ProxyConfig, Route};
 
@@ -29,7 +30,7 @@ pub async fn proxy(
         }
     };
 
-    let route = match choose_route(host, path, data.routes.iter().collect::<Vec<_>>()) {
+    let route = match choose_route(&host, path, data.routes.iter().collect::<Vec<_>>()) {
         Some(x) => x,
         None => {
             debug!("Could not find route");
@@ -45,7 +46,7 @@ pub async fn proxy(
         build_request_path(path, &route).as_ref(),
         body.clone(),
         &route.upstream,
-        host,
+        &host,
     ).await;
 
     // Convert the reqwest response to an Actix response
@@ -107,11 +108,17 @@ fn choose_route<'a>(host: &str, path: &str, routes: Vec<&'a Route>) -> Option<&'
     None
 }
 
-fn get_request_host(req: &HttpRequest) -> Option<&str> {
+fn get_request_host(req: &HttpRequest) -> Option<String> {
     let host = match req.headers().get("host") {
         Some(h) => h.to_str().ok(),
         None => req.uri().host()
     };
+
+    // Split off potential port
+    let host = host.map(|x| {
+        let split = x.split(":").collect::<Vec<_>>();
+        split.first().map(|x| x.to_string())
+    }).flatten();
 
     trace!("Got Host {host:?}");
     host
@@ -156,6 +163,9 @@ async fn reqwest_response_to_actix(response: reqwest::Result<Response>, proxy_co
                 .body(e.to_string()),
     };
 
+    trace!("Remote server addr: {:?}", response.remote_addr().map(|x| x.to_string()));
+    trace!("Got response status {} from server", response.status().as_u16());
+
     let mut builder = HttpResponse::build(response.status());
     for (k, v) in response.headers() {
         builder.insert_header((k, v));
@@ -186,13 +196,17 @@ async fn make_request(
     upstream: &str,
     original_host: &str,
 ) -> reqwest::Result<Response> {
-    let client = Client::new();
+    let client = Client::builder()
+        .redirect(Policy::none())
+        .build()
+        .unwrap();
 
     let request_url = if req.query_string().is_empty() {
        format!("{upstream}{path}")
     } else {
         format!("{upstream}{path}?{}", req.query_string())
     };
+    debug!("Sending request to {} {request_url}", req.method());
 
     let mut req_builder = client.request(
         req.method().clone(),
@@ -247,6 +261,5 @@ async fn make_request(
         .header("X-Forwarded-Host", original_host)
         .body(body);
 
-    debug!("Sending request to {request_url}");
     req_builder.send().await
 }
